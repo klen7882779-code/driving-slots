@@ -80,9 +80,10 @@
   .modal .sub { font-size: 12px; color: #9b9a92; margin-bottom: 14px; }
   .modal .close { float: right; border: 0; background: transparent; font-size: 20px; color: #9b9a92; cursor: pointer; }
   .log { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow-y: auto; }
-  .log li { padding: 8px 4px; border-bottom: 1px solid #f0eee7; font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+  .log li { padding: 8px 4px; border-bottom: 1px solid #f0eee7; font-size: 13px; display: flex; gap: 8px; align-items: flex-start; }
+  .log li > span:last-child { flex: 1; min-width: 0; }
   .log .lt { color: #9b9a92; font-size: 11px; white-space: nowrap; flex-shrink: 0; width: 92px; }
-  .log .badge { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 20px; flex-shrink: 0; }
+  .log .badge { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 20px; flex-shrink: 0; align-self: flex-start; white-space: nowrap; }
   .log .badge.add { background: #e1f5ee; color: #0f6e56; }
   .log .badge.del { background: #fcebeb; color: #a32d2d; }
   .log .who2 { font-weight: 600; }
@@ -120,7 +121,7 @@
 
 <div class="modal-bg" id="logModal">
   <div class="modal">
-    <button class="close" id="logClose">\u00d7</button>
+    <button class="close" id="logClose">×</button>
     <h2>修改紀錄</h2>
     <div class="sub">只記錄加人／刪人，保留最近 60 天，所有地點共用同一份。</div>
     <ul class="log" id="logList"></ul>
