@@ -233,13 +233,9 @@ function ensureOperator(){
 }
 
 function requireAdmin(){
-  if (sessionStorage.getItem("adminok") === "1" || localStorage.getItem("adminok") === "1") return true;
   const v = prompt("請輸入管理密碼：");
   if (v === null) return false;
-  if (v === ADMIN_PW){
-    localStorage.setItem("adminok","1");
-    return true;
-  }
+  if (v === ADMIN_PW) return true;
   alert("密碼錯誤。");
   return false;
 }
