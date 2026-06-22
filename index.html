@@ -80,14 +80,16 @@
   .modal .sub { font-size: 12px; color: #9b9a92; margin-bottom: 14px; }
   .modal .close { float: right; border: 0; background: transparent; font-size: 20px; color: #9b9a92; cursor: pointer; }
   .log { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow-y: auto; }
-  .log li { padding: 8px 4px; border-bottom: 1px solid #f0eee7; font-size: 13px; display: flex; gap: 8px; align-items: flex-start; }
-  .log li > span:last-child { flex: 1; min-width: 0; }
-  .log .lt { color: #9b9a92; font-size: 11px; white-space: nowrap; flex-shrink: 0; width: 92px; }
-  .log .badge { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 20px; flex-shrink: 0; align-self: flex-start; white-space: nowrap; }
+  .log li { padding: 9px 4px; border-bottom: 1px solid #f0eee7; font-size: 13px; display: grid; grid-template-columns: 84px 48px 1fr; gap: 4px 10px; align-items: start; }
+  .log .lt { color: #9b9a92; font-size: 11px; white-space: nowrap; padding-top: 1px; }
+  .log .badge { font-size: 11px; font-weight: 600; padding: 1px 0; border-radius: 20px; text-align: center; white-space: nowrap; align-self: start; }
   .log .badge.add { background: #e1f5ee; color: #0f6e56; }
   .log .badge.del { background: #fcebeb; color: #a32d2d; }
   .log .who2 { font-weight: 600; }
-  .log .empty { color: #9b9a92; padding: 16px 4px; }
+  .log .stu { margin-left: 8px; }
+  .log .ctx { color: #9b9a92; font-size: 11px; margin-top: 2px; }
+  .log .noname { color: #c08a2d; font-style: normal; }
+  .log .empty { color: #9b9a92; padding: 16px 4px; grid-column: 1 / -1; }
 </style>
 </head>
 <body>
@@ -517,10 +519,14 @@ function openLog(){
       const li = document.createElement("li");
       const actCls = e.act === "add" ? "add" : "del";
       const actTxt = e.act === "add" ? "加入" : "刪除";
-      li.innerHTML = '<span class="lt">'+fmtTime(e.t)+'</span>'+
+      const stu = (e.name && e.name.trim())
+        ? '<span class="stu">'+escapeHtml(e.name)+'</span>'
+        : '<span class="stu noname">（未填姓名）</span>';
+      li.innerHTML =
+        '<span class="lt">'+fmtTime(e.t)+'</span>'+
         '<span class="badge '+actCls+'">'+actTxt+'</span>'+
-        '<span><span class="who2">'+escapeHtml(e.by)+'</span>　'+escapeHtml(e.name)+
-        '<br><span style="color:#9b9a92;font-size:11px">'+escapeHtml(e.ctx||"")+'</span></span>';
+        '<span><span class="who2">'+escapeHtml(e.by||"(未選操作者)")+'</span>'+stu+
+        '<div class="ctx">'+escapeHtml(e.ctx||"")+'</div></span>';
       ul.appendChild(li);
     });
   }
