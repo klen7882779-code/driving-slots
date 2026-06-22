@@ -64,6 +64,13 @@
   .add:hover { background: #fff; border-color: #888780; }
   .add:disabled { opacity: .4; cursor: not-allowed; }
   .summary { background: #fff; border: 1px solid #e2e0d8; border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; font-size: 13px; color: #5f5e5a; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; }
+  .help { background: #eef3fb; border: 1px solid #d4e1f4; border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; }
+  .help-head { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+  .help-head .t { font-size: 15px; font-weight: 600; color: #1d4e89; }
+  .help-head .toggle { font-size: 13px; color: #1d4e89; font-weight: 500; }
+  .help-body { margin: 10px 0 0; padding-left: 20px; color: #3f4b5b; font-size: 13.5px; line-height: 1.55; }
+  .help-body li { margin: 6px 0; }
+  .help.collapsed .help-body { display: none; }
   @media (max-width: 520px){ .summary { grid-template-columns: 1fr; } }
   .summary .row { display: flex; gap: 16px; flex-wrap: wrap; }
   .summary b { color: #2c2c2a; }
@@ -110,6 +117,23 @@
 
   <div id="loading" class="loading">載入中，正在連上雲端資料庫…</div>
   <div id="main" style="display:none">
+    <div class="help" id="help">
+      <div class="help-head" id="helpHead">
+        <span class="t">使用說明</span>
+        <span class="toggle" id="helpToggle">收合 ▲</span>
+      </div>
+      <ul class="help-body">
+        <li>登記前請先在右上角「操作者」選好自己是誰，否則無法加人或刪人，每筆異動都會記錄是誰操作。</li>
+        <li>每個時段分「週一・週四」「週二・週五」兩組，各組獨立：自排車 14 位、手排車 8 位。</li>
+        <li>按各欄底下的「＋ 加一位」新增一格，直接打學員姓名；額滿時該欄會顯示「已額滿」並停用按鈕。</li>
+        <li>刪除某人按該列右邊的「×」即可。加人、刪人都會寫進修改紀錄。</li>
+        <li>最上方可切換「月份」「A／B 梯」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。</li>
+        <li>月份、梯次名稱旁的鉛筆「✎」可改名（例如把「A 梯」改成班號），全部地點一起更新。</li>
+        <li>「清空此頁名單」只清掉目前所在的月份／梯次／平日或週末，動作無法復原，請小心。</li>
+        <li>「修改紀錄」可查最近 60 天誰加了、刪了誰；「匯出文字」把目前這頁名單複製成純文字。</li>
+        <li>所有資料即時雲端同步，多台裝置同時開都會同步；右上角顯示「● 已連線」即表示連線正常。</li>
+      </ul>
+    </div>
     <div class="summary" id="summary"></div>
     <div id="slots"></div>
     <div class="tools">
@@ -536,6 +560,23 @@ function escapeHtml(s){
   return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 document.getElementById("logBtn").onclick = () => { if (requireAdmin()) openLog(); };
+
+// 使用說明收合
+(function(){
+  const help = document.getElementById("help");
+  const toggle = document.getElementById("helpToggle");
+  function apply(){
+    const collapsed = localStorage.getItem("helpCollapsed") === "1";
+    help.classList.toggle("collapsed", collapsed);
+    toggle.textContent = collapsed ? "展開 ▼" : "收合 ▲";
+  }
+  document.getElementById("helpHead").onclick = () => {
+    const collapsed = !(localStorage.getItem("helpCollapsed") === "1");
+    localStorage.setItem("helpCollapsed", collapsed ? "1" : "0");
+    apply();
+  };
+  apply();
+})();
 document.getElementById("logClose").onclick = () => document.getElementById("logModal").classList.remove("show");
 document.getElementById("logModal").onclick = (e) => { if (e.target.id === "logModal") document.getElementById("logModal").classList.remove("show"); };
 
