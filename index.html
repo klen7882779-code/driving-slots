@@ -499,6 +499,15 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
       before = inp.value;
       renderSummary();
     };
+    inp.onblur = () => {
+      // 失焦時若仍為空白，移除該格，不佔名額
+      setTimeout(() => {
+        if (list[ni] !== undefined && !(list[ni] || "").trim()){
+          list.splice(ni, 1);
+          pushSave(); renderSlots(); renderSummary();
+        }
+      }, 120);
+    };
     const del = document.createElement("button");
     del.className = "del"; del.textContent = "\u00d7"; del.title = "刪除";
     del.onclick = () => {
