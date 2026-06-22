@@ -463,6 +463,7 @@ function buildDayGroup(dgData, dg, timeLabel){
 function buildCol(dgData, type, label, timeLabel, dgLabel){
   const col = document.createElement("div");
   col.className = "col " + (type === "auto" ? "auto" : "man");
+  const colKey = (timeLabel||"") + "|" + (dgLabel||"") + "|" + type;
   const cap = CAP[type];
   const list = dgData[type];
   const remain = cap - list.length;
@@ -480,6 +481,8 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
     idx.className = "idx"; idx.textContent = (ni+1);
     const inp = document.createElement("input");
     inp.value = name; inp.placeholder = "姓名";
+    inp.dataset.colkey = colKey;
+    inp.dataset.ni = ni;
     let before = name;
     inp.onfocus = () => { before = inp.value; };
     inp.oninput = () => { list[ni] = inp.value; pushSave(); };
@@ -500,13 +503,14 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
       renderSummary();
     };
     inp.onblur = () => {
-      // 失焦時若仍為空白，移除該格，不佔名額
+      // 失焦時若這格仍為空白，移除該格，不佔名額
       setTimeout(() => {
-        if (list[ni] !== undefined && !(list[ni] || "").trim()){
-          list.splice(ni, 1);
+        const idxNow = parseInt(inp.dataset.ni, 10);
+        if (list[idxNow] !== undefined && !(list[idxNow] || "").trim()){
+          list.splice(idxNow, 1);
           pushSave(); renderSlots(); renderSummary();
         }
-      }, 120);
+      }, 150);
     };
     const del = document.createElement("button");
     del.className = "del"; del.textContent = "\u00d7"; del.title = "刪除";
@@ -528,7 +532,15 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
   add.onclick = () => {
     if (list.length >= cap) return;
     if (!ensureOperator()) return;
-    list.push(""); pushSave(); renderSlots(); renderSummary();
+    list.push("");
+    const newIdx = list.length - 1;
+    pushSave(); renderSlots(); renderSummary();
+    // 自動聚焦剛新增的空格，確保它一定能觸發失焦移除
+    requestAnimationFrame(() => {
+      const sel = '.names input[data-colkey="'+colKey+'"][data-ni="'+newIdx+'"]';
+      const el = document.querySelector(sel);
+      if (el) el.focus();
+    });
   };
   col.appendChild(add);
   return col;
