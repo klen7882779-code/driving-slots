@@ -515,10 +515,16 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
     const del = document.createElement("button");
     del.className = "del"; del.textContent = "\u00d7"; del.title = "刪除";
     del.onclick = () => {
-      if (!ensureOperator()) return;
       const removed = (list[ni] || "").trim();
-      list.splice(ni,1);
-      if (removed) addLog("del", removed, ctxLabel(timeLabel, dgLabel, type));
+      if (removed){
+        if (!ensureOperator()) return;
+        if (!confirm("確定刪除「"+removed+"」？")) return;
+        list.splice(ni,1);
+        addLog("del", removed, ctxLabel(timeLabel, dgLabel, type));
+      } else {
+        // 空白格直接移除，不需確認
+        list.splice(ni,1);
+      }
       pushSave(); renderSlots(); renderSummary();
     };
     li.append(idx, inp, del);
