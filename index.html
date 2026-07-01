@@ -80,6 +80,11 @@
   .tools button:hover { background: #faf9f6; }
   .saved { font-size: 12px; color: #9b9a92; }
   .loading { text-align: center; padding: 60px 20px; color: #9b9a92; font-size: 15px; }
+  .offbar { display: none; background: #fcebeb; border: 1px solid #f3c7c5; color: #a32d2d; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; align-items: center; gap: 10px; }
+  .offbar.show { display: flex; }
+  .offbar b { font-weight: 600; }
+  .offbar button { margin-left: auto; border: 1px solid #d99; background: #fff; color: #a32d2d; border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer; font-weight: 500; }
+  .offbar button:hover { background: #fdf3f3; }
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 100; overflow-y: auto; }
   .modal-bg.show { display: flex; }
   .modal { background: #fff; border-radius: 14px; max-width: 560px; width: 100%; padding: 20px; box-shadow: 0 10px 40px rgba(0,0,0,.2); }
@@ -119,6 +124,10 @@
 
   <div id="loading" class="loading">載入中，正在連上雲端資料庫…</div>
   <div id="main" style="display:none">
+    <div class="offbar" id="offbar">
+      <span>⚠ <b>連線中斷</b>，畫面可能不是最新資料，請重新整理。</span>
+      <button id="reloadBtn">重新整理</button>
+    </div>
     <div class="help" id="help">
       <div class="help-head" id="helpHead">
         <span class="t">使用說明</span>
@@ -929,10 +938,36 @@ document.getElementById("exportBtn").onclick = () => {
   );
 };
 
+let offlineTimer = null;
+function showOffline(on){
+  const bar = document.getElementById("offbar");
+  if (on){
+    // 延遲 4 秒確認仍離線才顯示，避免載入瞬間短暫快取誤報
+    if (offlineTimer) return;
+    offlineTimer = setTimeout(() => {
+      if (bar) bar.classList.add("show");
+      setStatus("err", "連線中斷");
+    }, 4000);
+  } else {
+    if (offlineTimer){ clearTimeout(offlineTimer); offlineTimer = null; }
+    if (bar) bar.classList.remove("show");
+  }
+}
+
+document.getElementById("reloadBtn").onclick = () => location.reload();
+
 onAuthStateChanged(auth, user => {
   if (!user) return;
   setStatus("live", "已連線");
-  onSnapshot(DOC, async snap => {
+  onSnapshot(DOC, { includeMetadataChanges: true }, async snap => {
+    // fromCache = true 代表目前拿的是本機快取、沒連上伺服器
+    const offline = snap.metadata.fromCache;
+    if (offline){
+      showOffline(true);
+    } else {
+      showOffline(false);
+      setStatus("live", "已連線");
+    }
     if (!snap.exists()){
       data = blankData();
       try { await setDoc(DOC, { payload: JSON.stringify(data), updatedAt: Date.now() }); } catch(e){ console.error(e); }
@@ -947,13 +982,27 @@ onAuthStateChanged(auth, user => {
     document.getElementById("main").style.display = "";
     renderAll();
   }, err => {
+    showOffline(true);
     setStatus("err", "連線錯誤");
     console.error(err);
     document.getElementById("loading").textContent = "連線失敗：" + err.message;
   });
 });
 
+// 網路恢復、或分頁重新切回前景時，主動提醒重新整理以確保最新
+window.addEventListener("offline", () => showOffline(true));
+window.addEventListener("online", () => {
+  // 網路回來，snapshot 通常會自動補上；仍顯示提示讓使用者確認
+  showOffline(true);
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && !navigator.onLine){
+    showOffline(true);
+  }
+});
+
 signInAnonymously(auth).catch(err => {
+  showOffline(true);
   setStatus("err", "登入失敗");
   document.getElementById("loading").textContent = "匿名登入失敗：" + err.message;
 });
