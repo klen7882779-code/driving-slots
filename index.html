@@ -109,7 +109,6 @@
   <h1>名額管理 — 第一駕訓班</h1>
   <div class="bar">
     <div class="seg" id="vehicleseg"></div>
-    <div class="seg" id="monthseg"></div>
     <div class="seg" id="cohortseg"></div>
     <div class="seg" id="weekseg"></div>
     <div class="seg" id="kindseg"></div>
@@ -138,9 +137,9 @@
         <li>每個時段分「週一・週四」「週二・週五」兩組，各組獨立：自排車 14 位、手排車 8 位。</li>
         <li>按各欄底下的「＋ 加一位」新增一格，直接打學員姓名；額滿時該欄會顯示「已額滿」並停用按鈕。</li>
         <li>刪除某人按該列右邊的「×」即可。加人、刪人都會寫進修改紀錄。</li>
-        <li>最上方可切換「月份」「A／B 梯」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。</li>
+        <li>最上方可切換「梯次」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。汽車班最多同時保留 6 個梯次，超過會先提示確認，且可用「復原剛移除的梯次」救回。</li>
         <li>最上方「汽車／機車」可切換班別。機車班（新店場地）以「梯次」管理：按「＋梯」新增一梯、自己輸入名稱（例如 7/13-7/19），新梯排在最後、最多同時顯示 4 梯，超過自動移除最舊的；平日為週一二四五五個時段、假日為週六日上午，每時段 11 人，不分車種與梯次。</li>
-        <li>月份、梯次名稱旁的鉛筆「✎」可改名（例如把「A 梯」改成班號），全部地點一起更新。</li>
+        <li>梯次名稱旁的鉛筆「✎」可改名（例如改成日期或班號）。</li>
         <li>「清空此頁名單」只清掉目前所在的月份／梯次／平日或週末，動作無法復原，請小心。</li>
         <li>「修改紀錄」可查最近 60 天誰加了、刪了誰；「匯出文字」把目前這頁名單複製成純文字。</li>
         <li>所有資料即時雲端同步，多台裝置同時開都會同步；右上角顯示「● 已連線」即表示連線正常。</li>
@@ -152,6 +151,7 @@
       <button id="logBtn">修改紀錄</button>
       <button id="exportBtn">匯出文字</button>
       <button id="resetCohort">清空此頁名單</button>
+      <button id="undoCohortBtn" style="display:none">復原剛移除的梯次</button>
       <span class="saved" id="savedHint"></span>
     </div>
   </div>
@@ -186,7 +186,7 @@ const db = getFirestore(app);
 const DOC = doc(db, "slots", "shared");
 
 const CAP = { auto: 14, man: 8 };
-const COHORTS = ["A","B"];
+const CAR_KEEP_COHORTS = 6;   // 汽車班最多同時保留 6 個梯次，超過提示確認後移除最舊的
 const LOG_KEEP_MS = 60 * 24 * 60 * 60 * 1000; // 60 天
 const DEFAULT_OPERATORS = ["教練A","教練B","櫃台","主任"];
 const ADMIN_PW = "admin22102270";
@@ -219,8 +219,7 @@ const MOTO_WEEKEND_TIMES = [
 ];
 
 let data = null;
-let curMonth = null;
-let curCohort = "A";
+let curCohortId = null;      // 汽車目前選的梯次 id
 let curKind = "weekday";
 let curVehicle = "car";      // "car" | "moto"
 let curWeekId = null;        // 機車目前選的週次
@@ -232,10 +231,14 @@ function blankDayGroup(){ return { auto: [], man: [] }; }
 function blankWeekdaySlot(){ return { mon_thu: blankDayGroup(), tue_fri: blankDayGroup() }; }
 function blankWeekday(){ return WEEKDAY_TIMES.map(()=>blankWeekdaySlot()); }
 function blankWeekend(){ return WEEKEND_TIMES.map(()=>blankDayGroup()); }
-function blankMonth(name){
-  const m = { id: "m"+Math.random().toString(36).slice(2,8), name, cohortNames: { A: "A 梯", B: "B 梯" } };
-  COHORTS.forEach(c => m[c] = { weekday: blankWeekday(), weekend: blankWeekend() });
-  return m;
+function blankCarCohort(name, seq){
+  return { id: "c"+Math.random().toString(36).slice(2,8), name, seq, weekday: blankWeekday(), weekend: blankWeekend() };
+}
+function nextCarSeq(){
+  const cs = (data.car && data.car.cohorts) || [];
+  let mx = 0;
+  cs.forEach(c => { if (typeof c.seq === "number" && c.seq > mx) mx = c.seq; });
+  return mx + 1;
 }
 function blankMotoWeekday(){ const o={}; MOTO_WEEKDAY_TIMES.forEach(t=>o[t.key]=[]); return o; }
 function blankMotoWeekend(){ const o={}; MOTO_WEEKEND_TIMES.forEach(t=>o[t.key]=[]); return o; }
@@ -268,26 +271,52 @@ function makeNewWeek(name){
   return blankWeek(name, nextSeq());
 }
 function blankData(){
-  const now = new Date();
-  const months = [0,1,2].map(off => {
-    const d = new Date(now.getFullYear(), now.getMonth()+off, 1);
-    return blankMonth(d.getFullYear()+" 年 "+(d.getMonth()+1)+" 月");
-  });
+  const cohorts = [1,2,3,4,5,6].map(n => blankCarCohort("第"+n+"梯", n));
   const wk = blankWeek("第一梯", 1);
-  return { months, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [] };
+  return { car: { cohorts, lastRemoved: null }, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [] };
 }
 
 function migrate(d){
-  if (!d || !d.months) return blankData();
-  d.months.forEach(m => {
-    if (!m.cohortNames) m.cohortNames = { A: "A 梯", B: "B 梯" };
-    COHORTS.forEach(c => {
-      if (!m[c]) { m[c] = { weekday: blankWeekday(), weekend: blankWeekend() }; return; }
-      if (Array.isArray(m[c])) { m[c] = { weekday: m[c], weekend: blankWeekend() }; }
-      if (!m[c].weekday) m[c].weekday = blankWeekday();
-      if (!m[c].weekend) m[c].weekend = blankWeekend();
+  if (!d) return blankData();
+
+  // 舊版「月份 × A/B 梯」資料 → 攤平成新版最多 6 個梯次（只在尚未轉換過時執行一次，名單全部保留）
+  if (!d.car && d.months){
+    const legacyCohorts = ["A","B"];
+    const cohorts = [];
+    let seq = 0;
+    d.months.forEach(m => {
+      legacyCohorts.forEach(c => {
+        seq += 1;
+        let src = m[c];
+        if (!src) src = { weekday: blankWeekday(), weekend: blankWeekend() };
+        if (Array.isArray(src)) src = { weekday: src, weekend: blankWeekend() };
+        cohorts.push({
+          id: "c"+Math.random().toString(36).slice(2,8),
+          name: "第"+seq+"梯",
+          seq,
+          weekday: src.weekday || blankWeekday(),
+          weekend: src.weekend || blankWeekend()
+        });
+      });
     });
-  });
+    d.car = { cohorts, lastRemoved: null };
+    delete d.months;
+  }
+  if (!d.car || !d.car.cohorts || !d.car.cohorts.length){
+    d.car = { cohorts: [1,2,3,4,5,6].map(n => blankCarCohort("第"+n+"梯", n)), lastRemoved: null };
+  }
+  if (typeof d.car.lastRemoved === "undefined") d.car.lastRemoved = null;
+  // 正規化 seq、補齊欄位
+  (function(){
+    let n = 0;
+    d.car.cohorts.forEach(c => {
+      if (typeof c.seq !== "number"){ n += 1; c.seq = n; }
+      else if (c.seq > n) n = c.seq;
+      if (!c.weekday) c.weekday = blankWeekday();
+      if (!c.weekend) c.weekend = blankWeekend();
+    });
+  })();
+
   if (!d.moto || !d.moto.weeks || !d.moto.weeks.length){
     d.moto = { weeks: [ blankWeek("第一梯", 1) ] };
   }
@@ -384,13 +413,17 @@ function pushSave(){
   }, 400);
 }
 
-function month(){ return data.months.find(m => m.id === curMonth) || data.months[0]; }
-function kindData(){ return month()[curCohort][curKind]; }
-function cohortLabel(c){ return month().cohortNames[c] || (c+" 梯"); }
+function sortedCohorts(){ return data.car.cohorts.slice().sort((a,b)=>(a.seq||0)-(b.seq||0)); }
+function curCohortObj(){
+  const list = sortedCohorts();
+  return list.find(c => c.id === curCohortId) || list[0];
+}
+function kindData(){ return curCohortObj()[curKind]; }
+function cohortLabel(){ return curCohortObj().name; }
 function kindLabel(){ return curKind === "weekday" ? "平日" : "週末"; }
 
 function ctxLabel(timeLabel, dgLabel, type){
-  let s = month().name + " / " + cohortLabel(curCohort) + " / " + kindLabel() + " / " + timeLabel;
+  let s = cohortLabel() + " / " + kindLabel() + " / " + timeLabel;
   if (dgLabel) s += " / " + dgLabel;
   s += " / " + TYPE_LABEL[type];
   return s;
@@ -482,44 +515,49 @@ function renderWeekSeg(){
   seg.appendChild(add);
 }
 
-function renderMonthSeg(){
-  const seg = document.getElementById("monthseg");
-  seg.innerHTML = "";
-  data.months.forEach(m => {
-    const b = document.createElement("button");
-    b.textContent = m.name;
-    if (m.id === curMonth) b.className = "on";
-    b.onclick = () => { curMonth = m.id; renderAll(); };
-    seg.appendChild(b);
-  });
-  const edit = document.createElement("button");
-  edit.className = "editname"; edit.title = "改月份名稱"; edit.textContent = "\u270e";
-  edit.onclick = () => {
-    const m = month();
-    const v = prompt("月份名稱：", m.name);
-    if (v && v.trim()){ m.name = v.trim(); pushSave(); renderAll(); }
-  };
-  seg.appendChild(edit);
-}
-
 function renderCohortSeg(){
   const seg = document.getElementById("cohortseg");
   seg.innerHTML = "";
-  COHORTS.forEach(c => {
+  const list = sortedCohorts();
+  if (!curCohortId || !list.find(c => c.id === curCohortId)) curCohortId = list[0].id;
+  list.forEach(c => {
     const b = document.createElement("button");
-    b.textContent = cohortLabel(c);
-    if (c === curCohort) b.className = "on";
-    b.onclick = () => { curCohort = c; renderAll(); };
+    b.textContent = c.name;
+    if (c.id === curCohortId) b.className = "on";
+    b.onclick = () => { curCohortId = c.id; renderAll(); };
     seg.appendChild(b);
   });
+  // 改名
   const edit = document.createElement("button");
   edit.className = "editname"; edit.title = "改梯次名稱"; edit.textContent = "\u270e";
   edit.onclick = () => {
-    const m = month();
-    const v = prompt("「"+cohortLabel(curCohort)+"」改成：", cohortLabel(curCohort));
-    if (v && v.trim()){ m.cohortNames[curCohort] = v.trim(); pushSave(); renderAll(); }
+    const c = curCohortObj();
+    const v = prompt("梯次名稱：", c.name);
+    if (v && v.trim()){ c.name = v.trim(); pushSave(); renderAll(); }
   };
   seg.appendChild(edit);
+  // 新增梯次（超過 6 個時會提示確認，移除最舊的並可復原）
+  const add = document.createElement("button");
+  add.className = "editname"; add.title = "新增梯次"; add.textContent = "＋梯";
+  add.onclick = () => {
+    if (!ensureOperator()) return;
+    const v = prompt("新梯次名稱：", "");
+    if (v === null) return;
+    const name = v.trim();
+    if (!name) return;
+    const cohorts = data.car.cohorts;
+    if (cohorts.length >= CAR_KEEP_COHORTS){
+      const oldest = sortedCohorts()[0];
+      if (!confirm("目前已達 "+CAR_KEEP_COHORTS+" 個梯次上限，新增後最舊的「"+oldest.name+"」將被移除（之後可按下方「復原剛移除的梯次」救回）。確定要新增嗎？")) return;
+      const idx = cohorts.findIndex(x => x.id === oldest.id);
+      data.car.lastRemoved = cohorts.splice(idx,1)[0];
+    }
+    const w = blankCarCohort(name, nextCarSeq());
+    cohorts.push(w);
+    curCohortId = w.id;
+    pushSave(); renderAll();
+  };
+  seg.appendChild(add);
 }
 
 function renderKindSeg(){
@@ -539,20 +577,17 @@ function renderKindSeg(){
 
 function renderAll(){
   if (!data) return;
-  if (!curMonth) curMonth = data.months[0].id;
   renderWho();
   renderVehicleSeg();
   const carSegs = curVehicle === "car";
-  document.getElementById("monthseg").style.display = carSegs ? "" : "none";
   document.getElementById("cohortseg").style.display = carSegs ? "" : "none";
-  if (carSegs){
-    renderMonthSeg();
-    renderCohortSeg();
-  }
+  if (carSegs) renderCohortSeg();
   renderWeekSeg();
   renderKindSeg();
   renderSlots();
   renderSummary();
+  const undoBtn = document.getElementById("undoCohortBtn");
+  undoBtn.style.display = (carSegs && data.car.lastRemoved) ? "" : "none";
 }
 
 function renderSummary(){
@@ -888,9 +923,18 @@ document.getElementById("resetCohort").onclick = () => {
     pushSave(); renderAll();
     return;
   }
-  if (!confirm("確定清空「"+month().name+"　"+cohortLabel(curCohort)+"　"+kindLabel()+"」所有名單？")) return;
-  if (curKind === "weekday") month()[curCohort].weekday = blankWeekday();
-  else month()[curCohort].weekend = blankWeekend();
+  const c = curCohortObj();
+  if (!confirm("確定清空「"+c.name+"　"+kindLabel()+"」所有名單？")) return;
+  if (curKind === "weekday") c.weekday = blankWeekday();
+  else c.weekend = blankWeekend();
+  pushSave(); renderAll();
+};
+
+document.getElementById("undoCohortBtn").onclick = () => {
+  if (!data.car.lastRemoved) return;
+  data.car.cohorts.push(data.car.lastRemoved);
+  curCohortId = data.car.lastRemoved.id;
+  data.car.lastRemoved = null;
   pushSave(); renderAll();
 };
 
@@ -912,7 +956,7 @@ document.getElementById("exportBtn").onclick = () => {
     return;
   }
   const d = kindData();
-  let out = month().name+"　"+cohortLabel(curCohort)+"　"+kindLabel()+"\n";
+  let out = cohortLabel()+"　"+kindLabel()+"\n";
   if (curKind === "weekday"){
     WEEKDAY_TIMES.forEach((time,i) => {
       const s = d[i];
