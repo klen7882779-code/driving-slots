@@ -103,8 +103,10 @@
 <div class="wrap">
   <h1>名額管理 — 第一駕訓班</h1>
   <div class="bar">
+    <div class="seg" id="vehicleseg"></div>
     <div class="seg" id="monthseg"></div>
     <div class="seg" id="cohortseg"></div>
+    <div class="seg" id="weekseg"></div>
     <div class="seg" id="kindseg"></div>
     <div class="spacer"></div>
     <span class="who" id="whoBox">
@@ -128,6 +130,7 @@
         <li>按各欄底下的「＋ 加一位」新增一格，直接打學員姓名；額滿時該欄會顯示「已額滿」並停用按鈕。</li>
         <li>刪除某人按該列右邊的「×」即可。加人、刪人都會寫進修改紀錄。</li>
         <li>最上方可切換「月份」「A／B 梯」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。</li>
+        <li>最上方「汽車／機車」可切換班別。機車班（新店場地）以「週」為單位：按「＋週」新增本週、只保留最近 4 週，超過自動移除；平日為週一二四五五個時段、假日為週六日上午，每時段 11 人，不分車種與梯次。</li>
         <li>月份、梯次名稱旁的鉛筆「✎」可改名（例如把「A 梯」改成班號），全部地點一起更新。</li>
         <li>「清空此頁名單」只清掉目前所在的月份／梯次／平日或週末，動作無法復原，請小心。</li>
         <li>「修改紀錄」可查最近 60 天誰加了、刪了誰；「匯出文字」把目前這頁名單複製成純文字。</li>
@@ -191,10 +194,27 @@ const WEEKEND_TIMES = [
 ];
 const TYPE_LABEL = { auto: "自排", man: "手排" };
 
+// 機車班：新店場地，不分車種、不分梯，每時段 11 人
+const MOTO_CAP = 11;
+const MOTO_KEEP_WEEKS = 4;   // 只保留最近約一個月（4 週）
+const MOTO_WEEKDAY_TIMES = [
+  { key: "m1", label: "08:30-10:30" },
+  { key: "m2", label: "10:30-12:30" },
+  { key: "m3", label: "14:00-16:00" },
+  { key: "m4", label: "16:00-18:00" },
+  { key: "m5", label: "19:00-21:00" }
+];
+const MOTO_WEEKEND_TIMES = [
+  { key: "sat", label: "週六 08:30-12:30", color: "#534ab7" },
+  { key: "sun", label: "週日 08:30-12:30", color: "#d4537e" }
+];
+
 let data = null;
 let curMonth = null;
 let curCohort = "A";
 let curKind = "weekday";
+let curVehicle = "car";      // "car" | "moto"
+let curWeekId = null;        // 機車目前選的週次
 let applyingRemote = false;
 let saveTimer = null;
 let curOperator = localStorage.getItem("operator") || "";
@@ -208,13 +228,29 @@ function blankMonth(name){
   COHORTS.forEach(c => m[c] = { weekday: blankWeekday(), weekend: blankWeekend() });
   return m;
 }
+function blankMotoWeekday(){ const o={}; MOTO_WEEKDAY_TIMES.forEach(t=>o[t.key]=[]); return o; }
+function blankMotoWeekend(){ const o={}; MOTO_WEEKEND_TIMES.forEach(t=>o[t.key]=[]); return o; }
+function weekRangeName(base){
+  // 傳入某日期，回傳該週(週一~週日)的 M/D-M/D 字串
+  const d = new Date(base);
+  const day = (d.getDay()+6)%7; // 週一=0
+  const mon = new Date(d); mon.setDate(d.getDate()-day);
+  const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+  const f = x => (x.getMonth()+1)+"/"+x.getDate();
+  return f(mon)+"-"+f(sun);
+}
+function blankWeek(name, startTs){
+  return { id: "w"+Math.random().toString(36).slice(2,8), name, start: startTs,
+           weekday: blankMotoWeekday(), weekend: blankMotoWeekend() };
+}
 function blankData(){
   const now = new Date();
   const months = [0,1,2].map(off => {
     const d = new Date(now.getFullYear(), now.getMonth()+off, 1);
     return blankMonth(d.getFullYear()+" 年 "+(d.getMonth()+1)+" 月");
   });
-  return { months, operators: DEFAULT_OPERATORS.slice(), log: [] };
+  const wk = blankWeek(weekRangeName(now), Date.now());
+  return { months, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [] };
 }
 
 function migrate(d){
@@ -228,9 +264,31 @@ function migrate(d){
       if (!m[c].weekend) m[c].weekend = blankWeekend();
     });
   });
+  if (!d.moto || !d.moto.weeks || !d.moto.weeks.length){
+    d.moto = { weeks: [ blankWeek(weekRangeName(new Date()), Date.now()) ] };
+  }
+  d.moto.weeks.forEach(w => {
+    if (!w.weekday) w.weekday = blankMotoWeekday();
+    if (!w.weekend) w.weekend = blankMotoWeekend();
+    MOTO_WEEKDAY_TIMES.forEach(t=>{ if(!Array.isArray(w.weekday[t.key])) w.weekday[t.key]=[]; });
+    MOTO_WEEKEND_TIMES.forEach(t=>{ if(!Array.isArray(w.weekend[t.key])) w.weekend[t.key]=[]; });
+  });
   if (!d.operators || !d.operators.length) d.operators = DEFAULT_OPERATORS.slice();
   if (!d.log) d.log = [];
   return d;
+}
+
+function pruneWeeks(){
+  if (!data.moto || !data.moto.weeks) return;
+  // 依 start 由新到舊排序，只留最近 MOTO_KEEP_WEEKS 週
+  data.moto.weeks.sort((a,b)=> (b.start||0)-(a.start||0));
+  if (data.moto.weeks.length > MOTO_KEEP_WEEKS){
+    data.moto.weeks = data.moto.weeks.slice(0, MOTO_KEEP_WEEKS);
+  }
+}
+function curWeek(){
+  const ws = data.moto.weeks;
+  return ws.find(w => w.id === curWeekId) || ws[0];
 }
 
 function pruneLog(){
@@ -337,6 +395,55 @@ document.getElementById("editWho").onclick = () => {
   if (list.length){ data.operators = list; pushSave(); renderWho(); }
 };
 
+function renderVehicleSeg(){
+  const seg = document.getElementById("vehicleseg");
+  seg.innerHTML = "";
+  [["car","汽車"],["moto","機車"]].forEach(([v,label]) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (v === curVehicle) b.className = "on";
+    b.onclick = () => { curVehicle = v; if (curKind!=="weekday"&&curKind!=="weekend") curKind="weekday"; renderAll(); };
+    seg.appendChild(b);
+  });
+}
+
+function renderWeekSeg(){
+  const seg = document.getElementById("weekseg");
+  seg.innerHTML = "";
+  if (curVehicle !== "moto"){ seg.style.display="none"; return; }
+  seg.style.display="";
+  pruneWeeks();
+  if (!curWeekId || !data.moto.weeks.find(w=>w.id===curWeekId)) curWeekId = data.moto.weeks[0].id;
+  data.moto.weeks.forEach(w => {
+    const b = document.createElement("button");
+    b.textContent = w.name;
+    if (w.id === curWeekId) b.className = "on";
+    b.onclick = () => { curWeekId = w.id; renderAll(); };
+    seg.appendChild(b);
+  });
+  // 改名
+  const edit = document.createElement("button");
+  edit.className = "editname"; edit.title = "改週次名稱"; edit.textContent = "\u270e";
+  edit.onclick = () => {
+    const w = curWeek();
+    const v = prompt("週次名稱：", w.name);
+    if (v && v.trim()){ w.name = v.trim(); pushSave(); renderAll(); }
+  };
+  seg.appendChild(edit);
+  // 新增本週
+  const add = document.createElement("button");
+  add.className = "editname"; add.title = "新增一週"; add.textContent = "＋週";
+  add.onclick = () => {
+    if (!ensureOperator()) return;
+    const w = blankWeek(weekRangeName(new Date()), Date.now());
+    data.moto.weeks.unshift(w);
+    pruneWeeks();
+    curWeekId = w.id;
+    pushSave(); renderAll();
+  };
+  seg.appendChild(add);
+}
+
 function renderMonthSeg(){
   const seg = document.getElementById("monthseg");
   seg.innerHTML = "";
@@ -380,7 +487,10 @@ function renderCohortSeg(){
 function renderKindSeg(){
   const seg = document.getElementById("kindseg");
   seg.innerHTML = "";
-  [["weekday","平日"],["weekend","週末"]].forEach(([k,label]) => {
+  const opts = curVehicle === "moto"
+    ? [["weekday","平日 一二四五"],["weekend","假日 六日"]]
+    : [["weekday","平日"],["weekend","週末"]];
+  opts.forEach(([k,label]) => {
     const b = document.createElement("button");
     b.textContent = label;
     if (k === curKind) b.className = "on";
@@ -393,14 +503,31 @@ function renderAll(){
   if (!data) return;
   if (!curMonth) curMonth = data.months[0].id;
   renderWho();
-  renderMonthSeg();
-  renderCohortSeg();
+  renderVehicleSeg();
+  const carSegs = curVehicle === "car";
+  document.getElementById("monthseg").style.display = carSegs ? "" : "none";
+  document.getElementById("cohortseg").style.display = carSegs ? "" : "none";
+  if (carSegs){
+    renderMonthSeg();
+    renderCohortSeg();
+  }
+  renderWeekSeg();
   renderKindSeg();
   renderSlots();
   renderSummary();
 }
 
 function renderSummary(){
+  if (curVehicle === "moto"){
+    const w = curWeek();
+    const times = curKind==="weekday" ? MOTO_WEEKDAY_TIMES : MOTO_WEEKEND_TIMES;
+    const store = curKind==="weekday" ? w.weekday : w.weekend;
+    let used=0; times.forEach(t => used += (store[t.key]||[]).length);
+    const tot = MOTO_CAP*times.length;
+    document.getElementById("summary").innerHTML =
+      '<div class="row"><span class="lbl">機車</span><span>剩 <b>'+(tot-used)+'</b> / '+tot+'　（每時段 '+MOTO_CAP+' 人）</span></div>';
+    return;
+  }
   const d = kindData();
   let aUsed=0, mUsed=0, units;
   if (curKind === "weekday"){
@@ -419,6 +546,7 @@ function renderSummary(){
 function renderSlots(){
   const root = document.getElementById("slots");
   root.innerHTML = "";
+  if (curVehicle === "moto"){ renderMotoSlots(root); return; }
   const d = kindData();
   if (curKind === "weekday"){
     WEEKDAY_TIMES.forEach((time, i) => {
@@ -552,7 +680,104 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
   return col;
 }
 
-// 修改紀錄視窗
+// ===== 機車班渲染 =====
+function motoStore(){
+  const w = curWeek();
+  return curKind==="weekday" ? w.weekday : w.weekend;
+}
+function motoCtxLabel(timeLabel){
+  return "機車 / " + curWeek().name + " / " + (curKind==="weekday"?"平日":"假日") + " / " + timeLabel;
+}
+function renderMotoSlots(root){
+  const times = curKind==="weekday" ? MOTO_WEEKDAY_TIMES : MOTO_WEEKEND_TIMES;
+  const store = motoStore();
+  times.forEach(t => {
+    const div = document.createElement("div");
+    div.className = "slot";
+    const color = t.color || "#5f7a3a";
+    div.innerHTML = '<div class="slot-head"><span class="dg-dot" style="background:'+color+'"></span><span class="time">'+t.label+'</span></div>';
+    div.appendChild(buildMotoCol(store, t.key, t.label));
+    root.appendChild(div);
+  });
+}
+function buildMotoCol(store, timeKey, timeLabel){
+  if (!Array.isArray(store[timeKey])) store[timeKey] = [];
+  const list = store[timeKey];
+  const cap = MOTO_CAP;
+  const remain = cap - list.length;
+  const colKey = "moto|"+timeKey;
+  const col = document.createElement("div");
+  col.className = "col auto";
+  const head = document.createElement("div");
+  head.className = "col-head";
+  head.innerHTML = '<span class="col-name">學員名單</span>'+
+    '<span class="remain '+(remain<=0?'full':'ok-auto')+'">剩 <b>'+remain+'</b>/'+cap+'</span>';
+  col.appendChild(head);
+  const ul = document.createElement("ul");
+  ul.className = "names";
+  list.forEach((name, ni) => {
+    const li = document.createElement("li");
+    const idx = document.createElement("span");
+    idx.className = "idx"; idx.textContent = (ni+1);
+    const inp = document.createElement("input");
+    inp.value = name; inp.placeholder = "姓名";
+    inp.dataset.colkey = colKey; inp.dataset.ni = ni;
+    let before = name;
+    inp.onfocus = () => { before = inp.value; };
+    inp.oninput = () => { list[ni] = inp.value; pushSave(); };
+    inp.onchange = () => {
+      const after = inp.value.trim();
+      if (after && !before.trim()){
+        if (!ensureOperator()){ list[ni]=""; inp.value=""; pushSave(); renderSummary(); return; }
+        addLog("add", after, motoCtxLabel(timeLabel));
+        pushSave();
+      }
+      before = inp.value; renderSummary();
+    };
+    inp.onblur = () => {
+      setTimeout(() => {
+        const i = parseInt(inp.dataset.ni,10);
+        if (list[i]!==undefined && !(list[i]||"").trim()){ list.splice(i,1); pushSave(); renderMotoRefresh(); }
+      }, 150);
+    };
+    const del = document.createElement("button");
+    del.className = "del"; del.textContent = "\u00d7"; del.title = "刪除";
+    del.onclick = () => {
+      const removed = (list[ni]||"").trim();
+      if (removed){
+        if (!ensureOperator()) return;
+        if (!confirm("確定刪除「"+removed+"」？")) return;
+        list.splice(ni,1);
+        addLog("del", removed, motoCtxLabel(timeLabel));
+      } else { list.splice(ni,1); }
+      pushSave(); renderMotoRefresh();
+    };
+    li.append(idx, inp, del);
+    ul.appendChild(li);
+  });
+  col.appendChild(ul);
+  const add = document.createElement("button");
+  add.className = "add";
+  add.textContent = remain>0 ? "＋ 加一位" : "已額滿";
+  add.disabled = remain<=0;
+  add.onclick = () => {
+    if (list.length >= cap) return;
+    if (!ensureOperator()) return;
+    list.push("");
+    const newIdx = list.length-1;
+    pushSave(); renderMotoRefresh();
+    requestAnimationFrame(() => {
+      const el = document.querySelector('.names input[data-colkey="'+colKey+'"][data-ni="'+newIdx+'"]');
+      if (el) el.focus();
+    });
+  };
+  col.appendChild(add);
+  return col;
+}
+function renderMotoRefresh(){
+  const root = document.getElementById("slots");
+  root.innerHTML = ""; renderMotoSlots(root); renderSummary();
+}
 function fmtTime(t){
   const d = new Date(t);
   const p = n => String(n).padStart(2,"0");
@@ -608,6 +833,15 @@ document.getElementById("logClose").onclick = () => document.getElementById("log
 document.getElementById("logModal").onclick = (e) => { if (e.target.id === "logModal") document.getElementById("logModal").classList.remove("show"); };
 
 document.getElementById("resetCohort").onclick = () => {
+  if (curVehicle === "moto"){
+    const w = curWeek();
+    const kl = curKind==="weekday" ? "平日" : "假日";
+    if (!confirm("確定清空「機車　"+w.name+"　"+kl+"」所有名單？")) return;
+    if (curKind==="weekday") w.weekday = blankMotoWeekday();
+    else w.weekend = blankMotoWeekend();
+    pushSave(); renderAll();
+    return;
+  }
   if (!confirm("確定清空「"+month().name+"　"+cohortLabel(curCohort)+"　"+kindLabel()+"」所有名單？")) return;
   if (curKind === "weekday") month()[curCohort].weekday = blankWeekday();
   else month()[curCohort].weekend = blankWeekend();
@@ -615,6 +849,22 @@ document.getElementById("resetCohort").onclick = () => {
 };
 
 document.getElementById("exportBtn").onclick = () => {
+  if (curVehicle === "moto"){
+    const w = curWeek();
+    const times = curKind==="weekday" ? MOTO_WEEKDAY_TIMES : MOTO_WEEKEND_TIMES;
+    const store = motoStore();
+    let out = "機車　"+w.name+"　"+(curKind==="weekday"?"平日 一二四五":"假日 六日")+"\n";
+    times.forEach(t => {
+      const arr = store[t.key]||[];
+      out += "\n【"+t.label+"】(剩"+(MOTO_CAP-arr.length)+")\n";
+      out += "    "+(arr.filter(Boolean).join("、")||"—")+"\n";
+    });
+    navigator.clipboard?.writeText(out).then(
+      ()=>alert("已複製到剪貼簿：\n\n"+out),
+      ()=>prompt("複製以下內容：", out)
+    );
+    return;
+  }
   const d = kindData();
   let out = month().name+"　"+cohortLabel(curCohort)+"　"+kindLabel()+"\n";
   if (curKind === "weekday"){
