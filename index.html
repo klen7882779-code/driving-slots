@@ -130,7 +130,7 @@
         <li>按各欄底下的「＋ 加一位」新增一格，直接打學員姓名；額滿時該欄會顯示「已額滿」並停用按鈕。</li>
         <li>刪除某人按該列右邊的「×」即可。加人、刪人都會寫進修改紀錄。</li>
         <li>最上方可切換「月份」「A／B 梯」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。</li>
-        <li>最上方「汽車／機車」可切換班別。機車班（新店場地）以「週」為單位：按「＋週」新增本週、只保留最近 4 週，超過自動移除；平日為週一二四五五個時段、假日為週六日上午，每時段 11 人，不分車種與梯次。</li>
+        <li>最上方「汽車／機車」可切換班別。機車班（新店場地）以「梯次」管理：按「＋梯」新增一梯、自己輸入名稱（例如 7/13-7/19），新梯排在最後、最多同時顯示 4 梯，超過自動移除最舊的；平日為週一二四五五個時段、假日為週六日上午，每時段 11 人，不分車種與梯次。</li>
         <li>月份、梯次名稱旁的鉛筆「✎」可改名（例如把「A 梯」改成班號），全部地點一起更新。</li>
         <li>「清空此頁名單」只清掉目前所在的月份／梯次／平日或週末，動作無法復原，請小心。</li>
         <li>「修改紀錄」可查最近 60 天誰加了、刪了誰；「匯出文字」把目前這頁名單複製成純文字。</li>
@@ -245,12 +245,18 @@ function weekRangeNameFromMonday(mon){
 function weekRangeName(base){
   return weekRangeNameFromMonday(weekMonday(base));
 }
-function blankWeek(name, startTs){
-  return { id: "w"+Math.random().toString(36).slice(2,8), name, start: startTs,
+function blankWeek(name, seq){
+  return { id: "w"+Math.random().toString(36).slice(2,8), name, seq: seq,
            weekday: blankMotoWeekday(), weekend: blankMotoWeekend() };
 }
-function makeWeekFromMonday(mon){
-  return blankWeek(weekRangeNameFromMonday(mon), mon.getTime());
+function nextSeq(){
+  const ws = (data.moto && data.moto.weeks) || [];
+  let mx = 0;
+  ws.forEach(w => { if (typeof w.seq === "number" && w.seq > mx) mx = w.seq; });
+  return mx + 1;
+}
+function makeNewWeek(name){
+  return blankWeek(name, nextSeq());
 }
 function blankData(){
   const now = new Date();
@@ -258,7 +264,7 @@ function blankData(){
     const d = new Date(now.getFullYear(), now.getMonth()+off, 1);
     return blankMonth(d.getFullYear()+" 年 "+(d.getMonth()+1)+" 月");
   });
-  const wk = makeWeekFromMonday(weekMonday(now));
+  const wk = blankWeek("第一梯", 1);
   return { months, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [] };
 }
 
@@ -274,8 +280,16 @@ function migrate(d){
     });
   });
   if (!d.moto || !d.moto.weeks || !d.moto.weeks.length){
-    d.moto = { weeks: [ makeWeekFromMonday(weekMonday(new Date())) ] };
+    d.moto = { weeks: [ blankWeek("第一梯", 1) ] };
   }
+  // 正規化 seq：舊資料若沒有 seq，依現有順序補上
+  (function(){
+    let n = 0;
+    d.moto.weeks.forEach(w => {
+      if (typeof w.seq !== "number"){ n += 1; w.seq = n; }
+      else if (w.seq > n) n = w.seq;
+    });
+  })();
   d.moto.weeks.forEach(w => {
     if (!w.weekday) w.weekday = blankMotoWeekday();
     if (!w.weekend) w.weekend = blankMotoWeekend();
@@ -306,9 +320,9 @@ function migrate(d){
 
 function pruneWeeks(){
   if (!data.moto || !data.moto.weeks) return;
-  // 由舊到新排序（舊前新後、往右排）
-  data.moto.weeks.sort((a,b)=> (a.start||0)-(b.start||0));
-  // 只留最近 MOTO_KEEP_WEEKS 週：超過時砍掉最前面(最舊)的
+  // 依 seq 由小到大（舊前新後、往右排）
+  data.moto.weeks.sort((a,b)=> (a.seq||0)-(b.seq||0));
+  // 只留最新 MOTO_KEEP_WEEKS 個：超過時砍掉最前面(最舊)的
   if (data.moto.weeks.length > MOTO_KEEP_WEEKS){
     data.moto.weeks = data.moto.weeks.slice(data.moto.weeks.length - MOTO_KEEP_WEEKS);
   }
@@ -458,18 +472,17 @@ function renderWeekSeg(){
     if (v && v.trim()){ w.name = v.trim(); pushSave(); renderAll(); }
   };
   seg.appendChild(edit);
-  // 新增下一週（接續現有最新一週，往後排、不重複）
+  // 新增梯次（空白，日期由使用者自己填，加在最後面）
   const add = document.createElement("button");
-  add.className = "editname"; add.title = "新增下一週"; add.textContent = "＋週";
+  add.className = "editname"; add.title = "新增梯次"; add.textContent = "＋梯";
   add.onclick = () => {
     if (!ensureOperator()) return;
-    const weeks = data.moto.weeks;
-    const latest = weeks[weeks.length - 1];
-    // 以最新一週的週一往後推 7 天當作下一週；若無 start 則用今天
-    const baseMon = latest && latest.start ? new Date(latest.start) : weekMonday(new Date());
-    const nextMon = new Date(baseMon); nextMon.setDate(baseMon.getDate() + 7);
-    const w = makeWeekFromMonday(nextMon);
-    weeks.push(w);
+    const v = prompt("新梯次名稱（例如 7/13-7/19）：", "");
+    if (v === null) return;
+    const name = v.trim();
+    if (!name) return;
+    const w = blankWeek(name, nextSeq());
+    data.moto.weeks.push(w);      // 加在最後面
     pruneWeeks();
     curWeekId = w.id;
     pushSave(); renderAll();
