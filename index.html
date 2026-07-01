@@ -296,23 +296,6 @@ function migrate(d){
     MOTO_WEEKDAY_TIMES.forEach(t=>{ if(!Array.isArray(w.weekday[t.key])) w.weekday[t.key]=[]; });
     MOTO_WEEKEND_TIMES.forEach(t=>{ if(!Array.isArray(w.weekend[t.key])) w.weekend[t.key]=[]; });
   });
-  // 依名稱去重：同名週次只保留一個（合併掉早期重複產生的空週）
-  (function(){
-    const seen = {};
-    const kept = [];
-    d.moto.weeks.forEach(w => {
-      const key = w.name;
-      if (seen[key] === undefined){
-        seen[key] = kept.length;
-        kept.push(w);
-      } else {
-        // 已有同名週次：若目前這個有資料而保留的沒資料，換成有資料的
-        const hasData = wk => Object.values(wk.weekday||{}).some(a=>a.length) || Object.values(wk.weekend||{}).some(a=>a.length);
-        if (hasData(w) && !hasData(kept[seen[key]])) kept[seen[key]] = w;
-      }
-    });
-    d.moto.weeks = kept;
-  })();
   if (!d.operators || !d.operators.length) d.operators = DEFAULT_OPERATORS.slice();
   if (!d.log) d.log = [];
   return d;
@@ -454,8 +437,8 @@ function renderWeekSeg(){
   if (curVehicle !== "moto"){ seg.style.display="none"; return; }
   seg.style.display="";
   pruneWeeks();
-  const lastWeek = data.moto.weeks[data.moto.weeks.length - 1];
-  if (!curWeekId || !data.moto.weeks.find(w=>w.id===curWeekId)) curWeekId = lastWeek.id;
+  const firstWeek = data.moto.weeks[0];
+  if (!curWeekId || !data.moto.weeks.find(w=>w.id===curWeekId)) curWeekId = firstWeek.id;
   data.moto.weeks.forEach(w => {
     const b = document.createElement("button");
     b.textContent = w.name;
@@ -731,24 +714,28 @@ function motoStore(){
   const w = curWeek();
   return curKind==="weekday" ? w.weekday : w.weekend;
 }
+function motoList(timeKey){
+  // 每次即時從目前選中的梯次取得該時段陣列，避免用到過期參照
+  const store = motoStore();
+  if (!Array.isArray(store[timeKey])) store[timeKey] = [];
+  return store[timeKey];
+}
 function motoCtxLabel(timeLabel){
   return "機車 / " + curWeek().name + " / " + (curKind==="weekday"?"平日":"假日") + " / " + timeLabel;
 }
 function renderMotoSlots(root){
   const times = curKind==="weekday" ? MOTO_WEEKDAY_TIMES : MOTO_WEEKEND_TIMES;
-  const store = motoStore();
   times.forEach(t => {
     const div = document.createElement("div");
     div.className = "slot";
     const color = t.color || "#5f7a3a";
     div.innerHTML = '<div class="slot-head"><span class="dg-dot" style="background:'+color+'"></span><span class="time">'+t.label+'</span></div>';
-    div.appendChild(buildMotoCol(store, t.key, t.label));
+    div.appendChild(buildMotoCol(t.key, t.label));
     root.appendChild(div);
   });
 }
-function buildMotoCol(store, timeKey, timeLabel){
-  if (!Array.isArray(store[timeKey])) store[timeKey] = [];
-  const list = store[timeKey];
+function buildMotoCol(timeKey, timeLabel){
+  const list = motoList(timeKey);
   const cap = MOTO_CAP;
   const remain = cap - list.length;
   const colKey = "moto|"+timeKey;
@@ -770,11 +757,12 @@ function buildMotoCol(store, timeKey, timeLabel){
     inp.dataset.colkey = colKey; inp.dataset.ni = ni;
     let before = name;
     inp.onfocus = () => { before = inp.value; };
-    inp.oninput = () => { list[ni] = inp.value; pushSave(); };
+    inp.oninput = () => { motoList(timeKey)[ni] = inp.value; pushSave(); };
     inp.onchange = () => {
       const after = inp.value.trim();
+      const L = motoList(timeKey);
       if (after && !before.trim()){
-        if (!ensureOperator()){ list[ni]=""; inp.value=""; pushSave(); renderSummary(); return; }
+        if (!ensureOperator()){ L[ni]=""; inp.value=""; pushSave(); renderSummary(); return; }
         addLog("add", after, motoCtxLabel(timeLabel));
         pushSave();
       }
@@ -783,19 +771,21 @@ function buildMotoCol(store, timeKey, timeLabel){
     inp.onblur = () => {
       setTimeout(() => {
         const i = parseInt(inp.dataset.ni,10);
-        if (list[i]!==undefined && !(list[i]||"").trim()){ list.splice(i,1); pushSave(); renderMotoRefresh(); }
+        const L = motoList(timeKey);
+        if (L[i]!==undefined && !(L[i]||"").trim()){ L.splice(i,1); pushSave(); renderMotoRefresh(); }
       }, 150);
     };
     const del = document.createElement("button");
     del.className = "del"; del.textContent = "\u00d7"; del.title = "刪除";
     del.onclick = () => {
-      const removed = (list[ni]||"").trim();
+      const L = motoList(timeKey);
+      const removed = (L[ni]||"").trim();
       if (removed){
         if (!ensureOperator()) return;
         if (!confirm("確定刪除「"+removed+"」？")) return;
-        list.splice(ni,1);
+        L.splice(ni,1);
         addLog("del", removed, motoCtxLabel(timeLabel));
-      } else { list.splice(ni,1); }
+      } else { L.splice(ni,1); }
       pushSave(); renderMotoRefresh();
     };
     li.append(idx, inp, del);
@@ -807,10 +797,11 @@ function buildMotoCol(store, timeKey, timeLabel){
   add.textContent = remain>0 ? "＋ 加一位" : "已額滿";
   add.disabled = remain<=0;
   add.onclick = () => {
-    if (list.length >= cap) return;
+    const L = motoList(timeKey);
+    if (L.length >= cap) return;
     if (!ensureOperator()) return;
-    list.push("");
-    const newIdx = list.length-1;
+    L.push("");
+    const newIdx = L.length-1;
     pushSave(); renderMotoRefresh();
     requestAnimationFrame(() => {
       const el = document.querySelector('.names input[data-colkey="'+colKey+'"][data-ni="'+newIdx+'"]');
