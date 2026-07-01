@@ -140,7 +140,7 @@
         <li>最上方可切換「梯次」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。汽車班最多同時保留 6 個梯次，超過會先提示確認，且可用「復原剛移除的梯次」救回。</li>
         <li>最上方「汽車／機車」可切換班別。機車班（新店場地）以「梯次」管理：按「＋梯」新增一梯、自己輸入名稱（例如 7/13-7/19），新梯排在最後、最多同時顯示 4 梯，超過自動移除最舊的；平日為週一二四五五個時段、假日為週六日上午，每時段 11 人，不分車種與梯次。</li>
         <li>梯次名稱旁的鉛筆「✎」可改名（例如改成日期或班號）。</li>
-        <li>「清空此頁名單」只清掉目前所在的月份／梯次／平日或週末，動作無法復原，請小心。</li>
+        <li>「清空此頁名單」需要輸入管理密碼才能執行，且會先自動備份目前名單，清空後可按「復原上次清空的名單」整批救回（只保留最近一次）。清空的動作也會寫進修改紀錄。</li>
         <li>「修改紀錄」可查最近 60 天誰加了、刪了誰；「匯出文字」把目前這頁名單複製成純文字。</li>
         <li>所有資料即時雲端同步，多台裝置同時開都會同步；右上角顯示「● 已連線」即表示連線正常。</li>
       </ul>
@@ -152,6 +152,7 @@
       <button id="exportBtn">匯出文字</button>
       <button id="resetCohort">清空此頁名單</button>
       <button id="undoCohortBtn" style="display:none">復原剛移除的梯次</button>
+      <button id="undoClearBtn" style="display:none">復原上次清空的名單</button>
       <span class="saved" id="savedHint"></span>
     </div>
   </div>
@@ -161,7 +162,7 @@
   <div class="modal">
     <button class="close" id="logClose">×</button>
     <h2>修改紀錄</h2>
-    <div class="sub">只記錄加人／刪人，保留最近 60 天，所有地點共用同一份。</div>
+    <div class="sub">記錄加人／刪人／整頁清空，保留最近 60 天，所有地點共用同一份。</div>
     <ul class="log" id="logList"></ul>
   </div>
 </div>
@@ -273,7 +274,7 @@ function makeNewWeek(name){
 function blankData(){
   const cohorts = [1,2,3,4,5,6].map(n => blankCarCohort("第"+n+"梯", n));
   const wk = blankWeek("第一梯", 1);
-  return { car: { cohorts, lastRemoved: null }, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [] };
+  return { car: { cohorts, lastRemoved: null }, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [], lastCleared: null };
 }
 
 function migrate(d){
@@ -336,6 +337,7 @@ function migrate(d){
   });
   if (!d.operators || !d.operators.length) d.operators = DEFAULT_OPERATORS.slice();
   if (!d.log) d.log = [];
+  if (typeof d.lastCleared === "undefined") d.lastCleared = null;
   return d;
 }
 
@@ -364,11 +366,27 @@ function addLog(action, name, ctx){
   data.log.push({
     t: Date.now(),
     by: curOperator || "(未選操作者)",
-    act: action, // "add" | "del"
+    act: action, // "add" | "del" | "clear"
     name: name || "",
     ctx: ctx
   });
   pruneLog();
+}
+
+function countCarNames(kind, value){
+  let n = 0;
+  if (kind === "weekday"){
+    value.forEach(slot => { WEEKDAY_DG.forEach(dg => { n += slot[dg.key].auto.filter(Boolean).length + slot[dg.key].man.filter(Boolean).length; }); });
+  } else {
+    value.forEach(slot => { n += slot.auto.filter(Boolean).length + slot.man.filter(Boolean).length; });
+  }
+  return n;
+}
+function countMotoNames(kind, value){
+  let n = 0;
+  const times = kind==="weekday" ? MOTO_WEEKDAY_TIMES : MOTO_WEEKEND_TIMES;
+  times.forEach(t => { n += (value[t.key]||[]).filter(Boolean).length; });
+  return n;
 }
 
 function ensureOperator(){
@@ -588,6 +606,13 @@ function renderAll(){
   renderSummary();
   const undoBtn = document.getElementById("undoCohortBtn");
   undoBtn.style.display = (carSegs && data.car.lastRemoved) ? "" : "none";
+  const undoClearBtn = document.getElementById("undoClearBtn");
+  if (data.lastCleared){
+    undoClearBtn.style.display = "";
+    undoClearBtn.textContent = "復原上次清空的「"+data.lastCleared.targetName+"」名單（"+data.lastCleared.count+" 人）";
+  } else {
+    undoClearBtn.style.display = "none";
+  }
 }
 
 function renderSummary(){
@@ -875,10 +900,12 @@ function openLog(){
     entries.forEach(e => {
       const li = document.createElement("li");
       const actCls = e.act === "add" ? "add" : "del";
-      const actTxt = e.act === "add" ? "加入" : "刪除";
-      const stu = (e.name && e.name.trim())
-        ? '<span class="stu">'+escapeHtml(e.name)+'</span>'
-        : '<span class="stu noname">（未填姓名）</span>';
+      const actTxt = e.act === "add" ? "加入" : (e.act === "clear" ? "清空" : "刪除");
+      const stu = e.act === "clear"
+        ? ""
+        : ((e.name && e.name.trim())
+          ? '<span class="stu">'+escapeHtml(e.name)+'</span>'
+          : '<span class="stu noname">（未填姓名）</span>');
       li.innerHTML =
         '<span class="lt">'+fmtTime(e.t)+'</span>'+
         '<span class="badge '+actCls+'">'+actTxt+'</span>'+
@@ -914,19 +941,50 @@ document.getElementById("logClose").onclick = () => document.getElementById("log
 document.getElementById("logModal").onclick = (e) => { if (e.target.id === "logModal") document.getElementById("logModal").classList.remove("show"); };
 
 document.getElementById("resetCohort").onclick = () => {
+  if (!requireAdmin()) return;
   if (curVehicle === "moto"){
     const w = curWeek();
     const kl = curKind==="weekday" ? "平日" : "假日";
-    if (!confirm("確定清空「機車　"+w.name+"　"+kl+"」所有名單？")) return;
+    const oldValue = curKind==="weekday" ? w.weekday : w.weekend;
+    const n = countMotoNames(curKind, oldValue);
+    if (!confirm("確定清空「機車　"+w.name+"　"+kl+"」所有名單？目前共 "+n+" 人。清空後可按「復原上次清空的名單」救回。")) return;
+    data.lastCleared = { vehicle:"moto", targetId:w.id, targetName:w.name, kind:curKind, kindLabel:kl, value: oldValue, count:n, clearedAt: Date.now() };
     if (curKind==="weekday") w.weekday = blankMotoWeekday();
     else w.weekend = blankMotoWeekend();
+    addLog("clear", "", "機車 / "+w.name+" / "+kl+"（整頁清空，共 "+n+" 人）");
     pushSave(); renderAll();
     return;
   }
   const c = curCohortObj();
-  if (!confirm("確定清空「"+c.name+"　"+kindLabel()+"」所有名單？")) return;
+  const oldValue = curKind === "weekday" ? c.weekday : c.weekend;
+  const n = countCarNames(curKind, oldValue);
+  if (!confirm("確定清空「"+c.name+"　"+kindLabel()+"」所有名單？目前共 "+n+" 人。清空後可按「復原上次清空的名單」救回。")) return;
+  data.lastCleared = { vehicle:"car", targetId:c.id, targetName:c.name, kind:curKind, kindLabel:kindLabel(), value: oldValue, count:n, clearedAt: Date.now() };
   if (curKind === "weekday") c.weekday = blankWeekday();
   else c.weekend = blankWeekend();
+  addLog("clear", "", cohortLabel()+" / "+kindLabel()+"（整頁清空，共 "+n+" 人）");
+  pushSave(); renderAll();
+};
+
+document.getElementById("undoClearBtn").onclick = () => {
+  if (!data.lastCleared) return;
+  const lc = data.lastCleared;
+  const target = lc.vehicle === "moto"
+    ? data.moto.weeks.find(x => x.id === lc.targetId)
+    : data.car.cohorts.find(x => x.id === lc.targetId);
+  if (!target){
+    alert("原本的「"+lc.targetName+"」已經不存在了，無法復原到畫面上。");
+    data.lastCleared = null;
+    pushSave(); renderAll();
+    return;
+  }
+  if (lc.kind === "weekday") target.weekday = lc.value;
+  else target.weekend = lc.value;
+  curVehicle = lc.vehicle;
+  if (lc.vehicle === "moto") curWeekId = target.id;
+  else curCohortId = target.id;
+  curKind = lc.kind;
+  data.lastCleared = null;
   pushSave(); renderAll();
 };
 
