@@ -230,18 +230,27 @@ function blankMonth(name){
 }
 function blankMotoWeekday(){ const o={}; MOTO_WEEKDAY_TIMES.forEach(t=>o[t.key]=[]); return o; }
 function blankMotoWeekend(){ const o={}; MOTO_WEEKEND_TIMES.forEach(t=>o[t.key]=[]); return o; }
-function weekRangeName(base){
-  // 傳入某日期，回傳該週(週一~週日)的 M/D-M/D 字串
+function weekMonday(base){
+  // 回傳該日期所在週的「週一」0 時 Date
   const d = new Date(base);
   const day = (d.getDay()+6)%7; // 週一=0
-  const mon = new Date(d); mon.setDate(d.getDate()-day);
+  const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate()-day);
+  return mon;
+}
+function weekRangeNameFromMonday(mon){
   const sun = new Date(mon); sun.setDate(mon.getDate()+6);
   const f = x => (x.getMonth()+1)+"/"+x.getDate();
   return f(mon)+"-"+f(sun);
 }
+function weekRangeName(base){
+  return weekRangeNameFromMonday(weekMonday(base));
+}
 function blankWeek(name, startTs){
   return { id: "w"+Math.random().toString(36).slice(2,8), name, start: startTs,
            weekday: blankMotoWeekday(), weekend: blankMotoWeekend() };
+}
+function makeWeekFromMonday(mon){
+  return blankWeek(weekRangeNameFromMonday(mon), mon.getTime());
 }
 function blankData(){
   const now = new Date();
@@ -249,7 +258,7 @@ function blankData(){
     const d = new Date(now.getFullYear(), now.getMonth()+off, 1);
     return blankMonth(d.getFullYear()+" 年 "+(d.getMonth()+1)+" 月");
   });
-  const wk = blankWeek(weekRangeName(now), Date.now());
+  const wk = makeWeekFromMonday(weekMonday(now));
   return { months, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [] };
 }
 
@@ -265,7 +274,7 @@ function migrate(d){
     });
   });
   if (!d.moto || !d.moto.weeks || !d.moto.weeks.length){
-    d.moto = { weeks: [ blankWeek(weekRangeName(new Date()), Date.now()) ] };
+    d.moto = { weeks: [ makeWeekFromMonday(weekMonday(new Date())) ] };
   }
   d.moto.weeks.forEach(w => {
     if (!w.weekday) w.weekday = blankMotoWeekday();
@@ -273,6 +282,23 @@ function migrate(d){
     MOTO_WEEKDAY_TIMES.forEach(t=>{ if(!Array.isArray(w.weekday[t.key])) w.weekday[t.key]=[]; });
     MOTO_WEEKEND_TIMES.forEach(t=>{ if(!Array.isArray(w.weekend[t.key])) w.weekend[t.key]=[]; });
   });
+  // 依名稱去重：同名週次只保留一個（合併掉早期重複產生的空週）
+  (function(){
+    const seen = {};
+    const kept = [];
+    d.moto.weeks.forEach(w => {
+      const key = w.name;
+      if (seen[key] === undefined){
+        seen[key] = kept.length;
+        kept.push(w);
+      } else {
+        // 已有同名週次：若目前這個有資料而保留的沒資料，換成有資料的
+        const hasData = wk => Object.values(wk.weekday||{}).some(a=>a.length) || Object.values(wk.weekend||{}).some(a=>a.length);
+        if (hasData(w) && !hasData(kept[seen[key]])) kept[seen[key]] = w;
+      }
+    });
+    d.moto.weeks = kept;
+  })();
   if (!d.operators || !d.operators.length) d.operators = DEFAULT_OPERATORS.slice();
   if (!d.log) d.log = [];
   return d;
@@ -280,10 +306,11 @@ function migrate(d){
 
 function pruneWeeks(){
   if (!data.moto || !data.moto.weeks) return;
-  // 依 start 由新到舊排序，只留最近 MOTO_KEEP_WEEKS 週
-  data.moto.weeks.sort((a,b)=> (b.start||0)-(a.start||0));
+  // 由舊到新排序（舊前新後、往右排）
+  data.moto.weeks.sort((a,b)=> (a.start||0)-(b.start||0));
+  // 只留最近 MOTO_KEEP_WEEKS 週：超過時砍掉最前面(最舊)的
   if (data.moto.weeks.length > MOTO_KEEP_WEEKS){
-    data.moto.weeks = data.moto.weeks.slice(0, MOTO_KEEP_WEEKS);
+    data.moto.weeks = data.moto.weeks.slice(data.moto.weeks.length - MOTO_KEEP_WEEKS);
   }
 }
 function curWeek(){
@@ -413,7 +440,8 @@ function renderWeekSeg(){
   if (curVehicle !== "moto"){ seg.style.display="none"; return; }
   seg.style.display="";
   pruneWeeks();
-  if (!curWeekId || !data.moto.weeks.find(w=>w.id===curWeekId)) curWeekId = data.moto.weeks[0].id;
+  const lastWeek = data.moto.weeks[data.moto.weeks.length - 1];
+  if (!curWeekId || !data.moto.weeks.find(w=>w.id===curWeekId)) curWeekId = lastWeek.id;
   data.moto.weeks.forEach(w => {
     const b = document.createElement("button");
     b.textContent = w.name;
@@ -430,13 +458,18 @@ function renderWeekSeg(){
     if (v && v.trim()){ w.name = v.trim(); pushSave(); renderAll(); }
   };
   seg.appendChild(edit);
-  // 新增本週
+  // 新增下一週（接續現有最新一週，往後排、不重複）
   const add = document.createElement("button");
-  add.className = "editname"; add.title = "新增一週"; add.textContent = "＋週";
+  add.className = "editname"; add.title = "新增下一週"; add.textContent = "＋週";
   add.onclick = () => {
     if (!ensureOperator()) return;
-    const w = blankWeek(weekRangeName(new Date()), Date.now());
-    data.moto.weeks.unshift(w);
+    const weeks = data.moto.weeks;
+    const latest = weeks[weeks.length - 1];
+    // 以最新一週的週一往後推 7 天當作下一週；若無 start 則用今天
+    const baseMon = latest && latest.start ? new Date(latest.start) : weekMonday(new Date());
+    const nextMon = new Date(baseMon); nextMon.setDate(baseMon.getDate() + 7);
+    const w = makeWeekFromMonday(nextMon);
+    weeks.push(w);
     pruneWeeks();
     curWeekId = w.id;
     pushSave(); renderAll();
