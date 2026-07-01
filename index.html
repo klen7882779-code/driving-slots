@@ -97,6 +97,7 @@
   .log .badge { font-size: 11px; font-weight: 600; padding: 1px 0; border-radius: 20px; text-align: center; white-space: nowrap; align-self: start; }
   .log .badge.add { background: #e1f5ee; color: #0f6e56; }
   .log .badge.del { background: #fcebeb; color: #a32d2d; }
+  .log .badge.rename { background: #eef1fb; color: #3b4fa3; }
   .log .who2 { font-weight: 600; }
   .log .stu { margin-left: 8px; }
   .log .ctx { color: #9b9a92; font-size: 11px; margin-top: 2px; }
@@ -138,7 +139,7 @@
         <li>按各欄底下的「＋ 加一位」新增一格，直接打學員姓名；額滿時該欄會顯示「已額滿」並停用按鈕。</li>
         <li>刪除某人按該列右邊的「×」即可。加人、刪人都會寫進修改紀錄。</li>
         <li>最上方可切換「梯次」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。汽車班最多同時保留 6 個梯次，超過會先提示確認，且可用「復原剛移除的梯次」救回。</li>
-        <li>最上方「汽車／機車」可切換班別。機車班（新店場地）以「梯次」管理：按「＋梯」新增一梯、自己輸入名稱（例如 7/13-7/19），新梯排在最後、最多同時顯示 4 梯，超過自動移除最舊的；平日為週一二四五五個時段、假日為週六日上午，每時段 11 人，不分車種與梯次。</li>
+        <li>最上方「汽車／機車」可切換班別。機車班（新店場地）以「梯次」管理：按「＋梯」新增一梯、自己輸入名稱（例如 7/13-7/19），新梯排在最後、最多同時保留 4 梯，超過會先提示確認，且可用「復原剛移除的梯次（機車）」救回；平日為週一二四五五個時段、假日為週六日上午，每時段 11 人，不分車種與梯次。</li>
         <li>梯次名稱旁的鉛筆「✎」可改名（例如改成日期或班號）。</li>
         <li>「清空此頁名單」需要輸入管理密碼才能執行，且會先自動備份目前名單，清空後可按「復原上次清空的名單」整批救回（只保留最近一次）。清空的動作也會寫進修改紀錄。</li>
         <li>「修改紀錄」可查最近 60 天誰加了、刪了誰；「匯出文字」把目前這頁名單複製成純文字。</li>
@@ -152,6 +153,7 @@
       <button id="exportBtn">匯出文字</button>
       <button id="resetCohort">清空此頁名單</button>
       <button id="undoCohortBtn" style="display:none">復原剛移除的梯次</button>
+      <button id="undoWeekBtn" style="display:none">復原剛移除的梯次（機車）</button>
       <button id="undoClearBtn" style="display:none">復原上次清空的名單</button>
       <span class="saved" id="savedHint"></span>
     </div>
@@ -162,7 +164,7 @@
   <div class="modal">
     <button class="close" id="logClose">×</button>
     <h2>修改紀錄</h2>
-    <div class="sub">記錄加人／刪人／整頁清空，保留最近 60 天，所有地點共用同一份。</div>
+    <div class="sub">記錄加人／刪人／整頁清空／改名，保留最近 60 天，所有地點共用同一份。</div>
     <ul class="log" id="logList"></ul>
   </div>
 </div>
@@ -274,7 +276,7 @@ function makeNewWeek(name){
 function blankData(){
   const cohorts = [1,2,3,4,5,6].map(n => blankCarCohort("第"+n+"梯", n));
   const wk = blankWeek("第一梯", 1);
-  return { car: { cohorts, lastRemoved: null }, moto: { weeks: [wk] }, operators: DEFAULT_OPERATORS.slice(), log: [], lastCleared: null };
+  return { car: { cohorts, lastRemoved: null }, moto: { weeks: [wk], lastRemoved: null }, operators: DEFAULT_OPERATORS.slice(), log: [], lastCleared: null };
 }
 
 function migrate(d){
@@ -319,8 +321,9 @@ function migrate(d){
   })();
 
   if (!d.moto || !d.moto.weeks || !d.moto.weeks.length){
-    d.moto = { weeks: [ blankWeek("第一梯", 1) ] };
+    d.moto = { weeks: [ blankWeek("第一梯", 1) ], lastRemoved: null };
   }
+  if (typeof d.moto.lastRemoved === "undefined") d.moto.lastRemoved = null;
   // 正規化 seq：舊資料若沒有 seq，依現有順序補上
   (function(){
     let n = 0;
@@ -341,15 +344,6 @@ function migrate(d){
   return d;
 }
 
-function pruneWeeks(){
-  if (!data.moto || !data.moto.weeks) return;
-  // 依 seq 由小到大（舊前新後、往右排）
-  data.moto.weeks.sort((a,b)=> (a.seq||0)-(b.seq||0));
-  // 只留最新 MOTO_KEEP_WEEKS 個：超過時砍掉最前面(最舊)的
-  if (data.moto.weeks.length > MOTO_KEEP_WEEKS){
-    data.moto.weeks = data.moto.weeks.slice(data.moto.weeks.length - MOTO_KEEP_WEEKS);
-  }
-}
 function curWeek(){
   const ws = data.moto.weeks;
   return ws.find(w => w.id === curWeekId) || ws[0];
@@ -366,7 +360,7 @@ function addLog(action, name, ctx){
   data.log.push({
     t: Date.now(),
     by: curOperator || "(未選操作者)",
-    act: action, // "add" | "del" | "clear"
+    act: action, // "add" | "del" | "clear" | "rename"
     name: name || "",
     ctx: ctx
   });
@@ -476,7 +470,10 @@ document.getElementById("editWho").onclick = () => {
   const v = prompt("操作者名單（用、或逗號分隔）：", cur);
   if (v === null) return;
   const list = v.split(/[、,，]/).map(s => s.trim()).filter(Boolean);
-  if (list.length){ data.operators = list; pushSave(); renderWho(); }
+  if (list.length){
+    addLog("rename", "", "操作者名單變更：「"+cur+"」→「"+list.join("、")+"」");
+    data.operators = list; pushSave(); renderWho();
+  }
 };
 
 function renderVehicleSeg(){
@@ -496,7 +493,7 @@ function renderWeekSeg(){
   seg.innerHTML = "";
   if (curVehicle !== "moto"){ seg.style.display="none"; return; }
   seg.style.display="";
-  pruneWeeks();
+  data.moto.weeks.sort((a,b)=> (a.seq||0)-(b.seq||0));
   const firstWeek = data.moto.weeks[0];
   if (!curWeekId || !data.moto.weeks.find(w=>w.id===curWeekId)) curWeekId = firstWeek.id;
   data.moto.weeks.forEach(w => {
@@ -512,7 +509,12 @@ function renderWeekSeg(){
   edit.onclick = () => {
     const w = curWeek();
     const v = prompt("梯次名稱：", w.name);
-    if (v && v.trim()){ w.name = v.trim(); pushSave(); renderAll(); }
+    if (v && v.trim()){
+      const oldName = w.name;
+      w.name = v.trim();
+      addLog("rename", "", "機車梯次改名：「"+oldName+"」→「"+w.name+"」");
+      pushSave(); renderAll();
+    }
   };
   seg.appendChild(edit);
   // 新增梯次（空白，日期由使用者自己填，加在最後面）
@@ -524,9 +526,15 @@ function renderWeekSeg(){
     if (v === null) return;
     const name = v.trim();
     if (!name) return;
+    const weeks = data.moto.weeks;
+    if (weeks.length >= MOTO_KEEP_WEEKS){
+      const oldest = weeks.slice().sort((a,b)=>(a.seq||0)-(b.seq||0))[0];
+      if (!confirm("機車梯次目前已達 "+MOTO_KEEP_WEEKS+" 個上限，新增後最舊的「"+oldest.name+"」將被移除（之後可按下方「復原剛移除的梯次（機車）」救回）。確定要新增嗎？")) return;
+      const idx = weeks.findIndex(x => x.id === oldest.id);
+      data.moto.lastRemoved = weeks.splice(idx,1)[0];
+    }
     const w = blankWeek(name, nextSeq());
-    data.moto.weeks.push(w);      // 加在最後面
-    pruneWeeks();
+    weeks.push(w);      // 加在最後面
     curWeekId = w.id;
     pushSave(); renderAll();
   };
@@ -551,7 +559,12 @@ function renderCohortSeg(){
   edit.onclick = () => {
     const c = curCohortObj();
     const v = prompt("梯次名稱：", c.name);
-    if (v && v.trim()){ c.name = v.trim(); pushSave(); renderAll(); }
+    if (v && v.trim()){
+      const oldName = c.name;
+      c.name = v.trim();
+      addLog("rename", "", "汽車梯次改名：「"+oldName+"」→「"+c.name+"」");
+      pushSave(); renderAll();
+    }
   };
   seg.appendChild(edit);
   // 新增梯次（超過 6 個時會提示確認，移除最舊的並可復原）
@@ -606,6 +619,8 @@ function renderAll(){
   renderSummary();
   const undoBtn = document.getElementById("undoCohortBtn");
   undoBtn.style.display = (carSegs && data.car.lastRemoved) ? "" : "none";
+  const undoWeekBtn = document.getElementById("undoWeekBtn");
+  undoWeekBtn.style.display = (!carSegs && data.moto.lastRemoved) ? "" : "none";
   const undoClearBtn = document.getElementById("undoClearBtn");
   if (data.lastCleared){
     undoClearBtn.style.display = "";
@@ -899,9 +914,9 @@ function openLog(){
   } else {
     entries.forEach(e => {
       const li = document.createElement("li");
-      const actCls = e.act === "add" ? "add" : "del";
-      const actTxt = e.act === "add" ? "加入" : (e.act === "clear" ? "清空" : "刪除");
-      const stu = e.act === "clear"
+      const actCls = e.act === "add" ? "add" : (e.act === "rename" ? "rename" : "del");
+      const actTxt = e.act === "add" ? "加入" : (e.act === "clear" ? "清空" : (e.act === "rename" ? "改名" : "刪除"));
+      const stu = (e.act === "clear" || e.act === "rename")
         ? ""
         : ((e.name && e.name.trim())
           ? '<span class="stu">'+escapeHtml(e.name)+'</span>'
@@ -993,6 +1008,14 @@ document.getElementById("undoCohortBtn").onclick = () => {
   data.car.cohorts.push(data.car.lastRemoved);
   curCohortId = data.car.lastRemoved.id;
   data.car.lastRemoved = null;
+  pushSave(); renderAll();
+};
+
+document.getElementById("undoWeekBtn").onclick = () => {
+  if (!data.moto.lastRemoved) return;
+  data.moto.weeks.push(data.moto.lastRemoved);
+  curWeekId = data.moto.lastRemoved.id;
+  data.moto.lastRemoved = null;
   pushSave(); renderAll();
 };
 
