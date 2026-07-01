@@ -465,10 +465,10 @@ function renderWeekSeg(){
   });
   // 改名
   const edit = document.createElement("button");
-  edit.className = "editname"; edit.title = "改週次名稱"; edit.textContent = "\u270e";
+  edit.className = "editname"; edit.title = "改梯次名稱"; edit.textContent = "\u270e";
   edit.onclick = () => {
     const w = curWeek();
-    const v = prompt("週次名稱：", w.name);
+    const v = prompt("梯次名稱：", w.name);
     if (v && v.trim()){ w.name = v.trim(); pushSave(); renderAll(); }
   };
   seg.appendChild(edit);
