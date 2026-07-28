@@ -169,7 +169,7 @@
       </div>
       <ul class="help-body">
         <li>登記前請先在右上角「操作者」選好自己是誰，否則無法加人或刪人，每筆異動都會記錄是誰操作。</li>
-        <li>每個時段分「週一・週四」「週二・週五」兩組，各組獨立：自排車 14 位、手排車 8 位。</li>
+        <li>每個時段分「週一・週四」「週二・週五」兩組，各組獨立。平日各時段容量：06:00-08:30 為自排 6／手排 4，18:30-21:00 為自排 12／手排 6，其餘時段為自排 14／手排 8；週末維持自排 14／手排 8。若某欄現有人數超過新上限，會以紅字顯示「超額」且不能再加，名字不會被刪，請自行把多的人挪到其他時段。</li>
         <li>按各欄底下的「＋ 加一位」新增一格，直接打學員姓名；額滿時該欄會顯示「已額滿」並停用按鈕。</li>
         <li>刪除某人按該列右邊的「×」即可。加人、刪人都會寫進修改紀錄。</li>
         <li>最上方可切換「梯次」「平日／週末」；週末為週六上午、週六下午、週日上午三個時段。汽車班最多同時保留 6 個梯次，超過會先提示確認，且可用「復原剛移除的梯次」救回。</li>
@@ -222,7 +222,23 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const DOC = doc(db, "slots", "shared");
 
-const CAP = { auto: 14, man: 8 };
+const CAP = { auto: 14, man: 8 };   // 預設容量（週末、及未特別指定的平日時段沿用）
+// 平日「各時段」容量表：key = WEEKDAY_TIMES 的索引(0起算)，只列出跟預設不同的時段
+// 目前：第1個時段 06:00-08:30 = 自排6/手排4；第5個時段 18:30-21:00 = 自排12/手排6
+const WEEKDAY_CAP_BY_INDEX = {
+  0: { auto: 6,  man: 4 },
+  4: { auto: 12, man: 6 }
+};
+// 查某平日時段索引的容量（沒特別指定就回傳預設 CAP）
+function weekdayCapByIndex(i){ return WEEKDAY_CAP_BY_INDEX[i] || CAP; }
+// 由時段字串反查它是第幾個平日時段（找不到回 -1）
+function weekdayIndexOf(timeLabel){ return WEEKDAY_TIMES.indexOf(timeLabel); }
+// 給定「時段字串 + 車種」回傳該用的容量數字；週末或查不到時走預設
+function capFor(timeLabel, type){
+  const i = weekdayIndexOf(timeLabel);
+  if (i === -1) return CAP[type];      // 週末時段（label 不在平日清單）→ 預設
+  return weekdayCapByIndex(i)[type];
+}
 const CAR_KEEP_COHORTS = 6;   // 汽車班最多同時保留 6 個梯次，超過提示確認後移除最舊的
 const LOG_KEEP_MS = 60 * 24 * 60 * 60 * 1000; // 60 天
 const DEFAULT_OPERATORS = ["教練A","教練B","櫃台","主任"];
@@ -684,7 +700,18 @@ function renderSummary(){
     units = WEEKEND_TIMES.length;
     d.forEach(s => { aUsed += s.auto.length; mUsed += s.man.length; });
   }
-  const aTot = CAP.auto*units, mTot = CAP.man*units;
+  let aTot, mTot;
+  if (curKind === "weekday"){
+    // 平日：每個時段容量可能不同，逐時段 × 兩組(週一四/週二五) 加總
+    aTot = 0; mTot = 0;
+    WEEKDAY_TIMES.forEach((time, i) => {
+      const c = weekdayCapByIndex(i);
+      aTot += c.auto * WEEKDAY_DG.length;
+      mTot += c.man * WEEKDAY_DG.length;
+    });
+  } else {
+    aTot = CAP.auto*units; mTot = CAP.man*units;
+  }
   document.getElementById("summary").innerHTML =
     '<div class="row"><span class="lbl">自排</span><span>剩 <b>'+(aTot-aUsed)+'</b> / '+aTot+'</span></div>'+
     '<div class="row"><span class="lbl">手排</span><span>剩 <b>'+(mTot-mUsed)+'</b> / '+mTot+'</span></div>';
@@ -739,14 +766,17 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
   const col = document.createElement("div");
   col.className = "col " + (type === "auto" ? "auto" : "man");
   const colKey = (timeLabel||"") + "|" + (dgLabel||"") + "|" + type;
-  const cap = CAP[type];
+  const cap = capFor(timeLabel, type);
   const list = dgData[type];
   const remain = cap - list.length;
+  const over = list.length > cap;   // 超額（現有名字比新上限多）
   const okClass = type === "auto" ? "ok-auto" : "ok-man";
   const head = document.createElement("div");
   head.className = "col-head";
   head.innerHTML = '<span class="col-name">'+label+'</span>'+
-    '<span class="remain '+(remain<=0?'full':okClass)+'">剩 <b>'+remain+'</b>/'+cap+'</span>';
+    (over
+      ? '<span class="remain full">超額 <b>'+list.length+'</b>/'+cap+'</span>'
+      : '<span class="remain '+(remain<=0?'full':okClass)+'">剩 <b>'+remain+'</b>/'+cap+'</span>');
   col.appendChild(head);
   const ul = document.createElement("ul");
   ul.className = "names";
@@ -808,7 +838,7 @@ function buildCol(dgData, type, label, timeLabel, dgLabel){
   col.appendChild(ul);
   const add = document.createElement("button");
   add.className = "add";
-  add.textContent = remain>0 ? "＋ 加一位" : "已額滿";
+  add.textContent = remain>0 ? "＋ 加一位" : (over ? "已滿（超額）" : "已額滿");
   add.disabled = remain<=0;
   add.onclick = () => {
     if (list.length >= cap) return;
@@ -1075,12 +1105,14 @@ document.getElementById("exportBtn").onclick = () => {
   if (curKind === "weekday"){
     WEEKDAY_TIMES.forEach((time,i) => {
       const s = d[i];
+      const cap = weekdayCapByIndex(i);
       out += "\n【"+time+"】\n";
       WEEKDAY_DG.forEach(dg => {
         const g = s[dg.key];
+        const aR = cap.auto-g.auto.length, mR = cap.man-g.man.length;
         out += "  "+dg.label+"\n";
-        out += "    自排(剩"+(CAP.auto-g.auto.length)+")："+(g.auto.filter(Boolean).join("、")||"—")+"\n";
-        out += "    手排(剩"+(CAP.man-g.man.length)+")："+(g.man.filter(Boolean).join("、")||"—")+"\n";
+        out += "    自排("+(aR<0?"超額"+(-aR):"剩"+aR)+")："+(g.auto.filter(Boolean).join("、")||"—")+"\n";
+        out += "    手排("+(mR<0?"超額"+(-mR):"剩"+mR)+")："+(g.man.filter(Boolean).join("、")||"—")+"\n";
       });
     });
   } else {
